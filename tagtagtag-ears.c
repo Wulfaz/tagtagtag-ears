@@ -27,6 +27,16 @@
 // in idle state, we consider ears were moved and position is therefore unknown.
 
 #include <linux/version.h>
+
+/* Timer API renames: timer_delete_sync() (6.2, del_timer_sync() removed in
+ * 6.15) and timer_container_of() (6.16, replaces from_timer()). */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 2, 0)
+#define timer_delete_sync(timer) del_timer_sync(timer)
+#endif
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 16, 0)
+#define timer_container_of(var, callback_timer, timer_fieldname) \
+	from_timer(var, callback_timer, timer_fieldname)
+#endif
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/platform_device.h>
@@ -186,7 +196,7 @@ static void stop_motors(struct tagtagtagear_data *priv) {
 // Always stop motors.
 //
 static void tagtagtagear_broken_timer_cb(struct timer_list *t) {
-    struct tagtagtagear_data *priv = from_timer(priv, t, broken_timer);
+    struct tagtagtagear_data *priv = timer_container_of(priv, t, broken_timer);
     stop_motors(priv);
     if (priv->state_e == testing) {
         dev_err(priv->device, "timeout, declaring ear as broken");
@@ -198,7 +208,7 @@ static void tagtagtagear_broken_timer_cb(struct timer_list *t) {
 }
 
 static void reset_broken_timer(struct tagtagtagear_data *priv) {
-    del_timer_sync(&priv->broken_timer);
+    timer_delete_sync(&priv->broken_timer);
     mod_timer(&priv->broken_timer, jiffies + BROKEN_TIMEOUT_SECS * HZ);
 }
 
@@ -265,7 +275,7 @@ static void transition_to_running(struct tagtagtagear_data *priv, int position, 
         priv->state.running.direction = -1;
         start_motors_backward(priv);
     } else {
-        del_timer_sync(&priv->broken_timer);
+        timer_delete_sync(&priv->broken_timer);
         stop_motors(priv);  // We need to stop motors if we transitioned from detecting.
         if (priv->read_result_available == 1) {
             priv->read_result = position;
@@ -327,7 +337,7 @@ static void irq_handler_testing(struct tagtagtagear_data *priv) {
                 int ix;
 
                 // End of forward testing. Stop motors.
-                del_timer_sync(&priv->broken_timer);
+                timer_delete_sync(&priv->broken_timer);
                 stop_motors(priv);
                 // We should have 16 approximatively equivalent deltas and one at least twice larger.
                 first_delta = priv->state.testing.hole_deltas[0];
@@ -375,7 +385,7 @@ static void irq_handler_testing(struct tagtagtagear_data *priv) {
             int position;
             // We were running backward one position to test backward motor.
             // End of backward testing. Stop motors.
-            del_timer_sync(&priv->broken_timer);
+            timer_delete_sync(&priv->broken_timer);
             stop_motors(priv);
             if (priv->state.testing.forward_position == NUM_HOLES - EARS_OFFZERO) {
                 if (backward_delta < priv->detect_boundary_us) {
@@ -429,7 +439,7 @@ static void irq_handler_running(struct tagtagtagear_data *priv) {
     priv->state.running.count--;
     if (priv->state.running.count == 0) {
         int is_high;
-        del_timer_sync(&priv->broken_timer);
+        timer_delete_sync(&priv->broken_timer);
         stop_motors(priv);
         is_high = gpiod_get_value(priv->encoder_gpio);
         if (is_high) {
@@ -933,7 +943,7 @@ static void tagtagtagears_remove(struct platform_device *pdev) {
         if (priv->ears_class) {
             for (ix = 1; ix >= 0; ix--) {
                 if (priv->ear[ix].cdev.ops) {
-                    del_timer_sync(&priv->ear[ix].broken_timer);
+                    timer_delete_sync(&priv->ear[ix].broken_timer);
                     device_destroy(priv->ears_class, MKDEV(MAJOR(priv->chrdev), MINOR(priv->chrdev) + ix));
                     cdev_del(&priv->ear[ix].cdev);
                 }
